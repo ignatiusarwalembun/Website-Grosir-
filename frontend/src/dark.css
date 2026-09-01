@@ -1,0 +1,114 @@
+:root[data-theme='dark']{
+  color-scheme:dark;
+  --bg:#07111c;
+  --card:#0f1c29;
+  --text:#e8f0f5;
+  --muted:#91a5b5;
+  --line:#223443;
+  --shadow:0 18px 50px rgba(0,0,0,.28);
+}
+
+:root[data-theme='dark'] body{background:var(--bg);color:var(--text)}
+:root[data-theme='dark'] .header{background:rgba(7,17,28,.91);border-color:var(--line);box-shadow:0 8px 30px rgba(0,0,0,.12)}
+:root[data-theme='dark'] .brand strong,
+:root[data-theme='dark'] .desktopNav a.active,
+:root[data-theme='dark'] .desktopNav a:hover,
+:root[data-theme='dark'] .sectionTitle>a,
+:root[data-theme='dark'] .sectionMini h3,
+:root[data-theme='dark'] .productMeta>strong,
+:root[data-theme='dark'] .shopHero h1,
+:root[data-theme='dark'] .errorState h3,
+:root[data-theme='dark'] .emptyCart h2,
+:root[data-theme='dark'] .detailInfo h1,
+:root[data-theme='dark'] .detailInfo>strong,
+:root[data-theme='dark'] .cartSummary h2,
+:root[data-theme='dark'] .accountHero h1{color:#edf7ff}
+:root[data-theme='dark'] .desktopNav a{color:#96a9b8}
+
+:root[data-theme='dark'] .headerSearch,
+:root[data-theme='dark'] .mobileSearch,
+:root[data-theme='dark'] .filterSearch{background:#101f2d;border-color:#1f3545;color:#dbe8f0}
+:root[data-theme='dark'] .headerSearch:focus-within,
+:root[data-theme='dark'] .mobileSearch:focus-within,
+:root[data-theme='dark'] .filterSearch:focus-within{background:#132433;border-color:#238f85;box-shadow:0 0 0 3px rgba(20,184,166,.12)}
+:root[data-theme='dark'] input,
+:root[data-theme='dark'] select{color:#e8f0f5}
+:root[data-theme='dark'] input::placeholder{color:#718696}
+
+:root[data-theme='dark'] .headerActions button,
+:root[data-theme='dark'] .iconBtn{background:#0f1c29;border-color:#253746;color:#dce8f0}
+:root[data-theme='dark'] .headerActions button:hover,
+:root[data-theme='dark'] .iconBtn:hover{background:#152637;border-color:#315064;color:#fff;transform:translateY(-1px)}
+.themeToggle{transition:background .2s,border-color .2s,color .2s,transform .2s}
+:root[data-theme='dark'] .themeToggle{color:#f8c65a!important}
+
+:root[data-theme='dark'] .categoryCard,
+:root[data-theme='dark'] .productCard,
+:root[data-theme='dark'] .shopLayout aside,
+:root[data-theme='dark'] .errorState,
+:root[data-theme='dark'] .emptyCart,
+:root[data-theme='dark'] .infoCards>div,
+:root[data-theme='dark'] .orders article,
+:root[data-theme='dark'] .accountMenu button,
+:root[data-theme='dark'] .cartItems article,
+:root[data-theme='dark'] .cartSummary{background:#0f1c29;border-color:#223443;color:var(--text)}
+:root[data-theme='dark'] .categoryCard:hover,
+:root[data-theme='dark'] .productCard:hover,
+:root[data-theme='dark'] .accountMenu button:hover{border-color:#2a706b;box-shadow:var(--shadow)}
+:root[data-theme='dark'] .categoryCard>span{background:#102d2d;color:#56d7ca}
+:root[data-theme='dark'] .benefitWrap{background:#0c1c27;border:1px solid #1f3441}
+:root[data-theme='dark'] .productVisual,
+:root[data-theme='dark'] .cartVisual{background:linear-gradient(145deg,#122431,#0c1822)}
+:root[data-theme='dark'] .productVisual:after{background:rgba(20,184,166,.12)}
+:root[data-theme='dark'] .productVisual>b{background:#392b16;color:#f5b94d}
+:root[data-theme='dark'] .productMeta p{color:#91a5b5}
+:root[data-theme='dark'] .tierHint,
+:root[data-theme='dark'] .filterNote{background:#102d2d;color:#8fe4dc}
+:root[data-theme='dark'] .addBtn{background:#10202d;border-color:#28544f;color:#58d7ca}
+:root[data-theme='dark'] .addBtn:hover,
+:root[data-theme='dark'] .addBtn.added{background:#0f9f8f;color:#fff}
+
+:root[data-theme='dark'] .shopHero{background:linear-gradient(135deg,#0f2630,#101b29);border-color:#203847}
+:root[data-theme='dark'] .shopLayout select,
+:root[data-theme='dark'] .mobileFilters select{background:#101f2d;border-color:#253746;color:#dbe8f0}
+:root[data-theme='dark'] option{background:#101f2d;color:#e8f0f5}
+
+:root[data-theme='dark'] .detailVisual{background:linear-gradient(145deg,#102532,#0c1721)!important;border-color:#223443!important}
+:root[data-theme='dark'] .tiers{background:#0b1823!important;border-color:#223443!important}
+:root[data-theme='dark'] .tiers>div{border-color:#223443!important}
+:root[data-theme='dark'] .qty button{background:#122230!important;border-color:#29404f!important;color:#e8f0f5!important}
+:root[data-theme='dark'] .detailNotes{color:#9cb0be}
+
+:root[data-theme='dark'] .tabs{border-color:#223443}
+:root[data-theme='dark'] .tabs button{background:#0f1c29;border-color:#223443;color:#91a5b5}
+:root[data-theme='dark'] .tabs button.active{background:#12332f;border-color:#287a70;color:#80e2d8}
+:root[data-theme='dark'] .orders article small,
+:root[data-theme='dark'] .accountMenu small,
+:root[data-theme='dark'] .cartItems small,
+:root[data-theme='dark'] .cartItems span,
+:root[data-theme='dark'] .cartSummary small{color:#8ca0af}
+:root[data-theme='dark'] .accountHero{background:linear-gradient(135deg,#10293a,#12352f)!important;color:#eaf5f8}
+:root[data-theme='dark'] .accountMenu button{color:#e8f0f5}
+:root[data-theme='dark'] .accountMenu button i{font-style:normal}
+:root[data-theme='dark'] .trash{color:#ff8a8a!important}
+:root[data-theme='dark'] .cartSummary hr{border-color:#223443!important}
+
+:root[data-theme='dark'] footer{background:#08131e!important;border-color:#20303d!important;color:#91a5b5}
+:root[data-theme='dark'] footer b{color:#e7f0f5}
+:root[data-theme='dark'] footer .brand strong{color:#edf7ff}
+:root[data-theme='dark'] .mobileNav{background:rgba(10,21,31,.96)!important;border-color:#223443!important;box-shadow:0 -8px 30px rgba(0,0,0,.22)}
+:root[data-theme='dark'] .mobileNav a{color:#8399a9}
+:root[data-theme='dark'] .mobileNav a.active{color:#55d4c7}
+
+:root[data-theme='dark'] .skeleton i,
+:root[data-theme='dark'] .skImg{background:linear-gradient(90deg,#12202c,#1a2d3c,#12202c);background-size:200% 100%}
+
+:root[data-theme='dark'] .promoBadge{background:#132536;color:#e8f0f5}
+:root[data-theme='dark'] .floatingStat,
+:root[data-theme='dark'] .floatingBox{background:#10202d;color:#e9f5fb}
+
+:root[data-theme='dark'] *{scrollbar-color:#334b5c #0b1721}
+
+@media (prefers-reduced-motion:no-preference){
+  body,.header,.categoryCard,.productCard,.shopHero,.shopLayout aside,.accountMenu button,.cartItems article,.cartSummary,.mobileNav,.headerActions button,.iconBtn{transition:background-color .22s,border-color .22s,color .22s,box-shadow .22s}
+}
