@@ -1,0 +1,73 @@
+:root[data-theme='light']{
+  color-scheme:light;
+  --bg:#eef2f3;
+  --card:#f8faf9;
+  --text:#1d2933;
+  --muted:#667580;
+  --line:#dce4e6;
+  --shadow:0 14px 40px rgba(16,42,67,.07);
+}
+
+:root[data-theme='light'] body{background:var(--bg);color:var(--text)}
+:root[data-theme='light'] .header{background:rgba(246,249,249,.94);border-color:var(--line);box-shadow:0 7px 24px rgba(16,42,67,.035)}
+:root[data-theme='light'] .headerSearch,
+:root[data-theme='light'] .mobileSearch,
+:root[data-theme='light'] .filterSearch{background:#e7edef;border-color:#dde6e7}
+:root[data-theme='light'] .headerSearch:focus-within,
+:root[data-theme='light'] .mobileSearch:focus-within,
+:root[data-theme='light'] .filterSearch:focus-within{background:#f6f9f8;border-color:#afd7d2;box-shadow:0 0 0 3px rgba(20,184,166,.07)}
+:root[data-theme='light'] input::placeholder{color:#7a8992}
+
+:root[data-theme='light'] .headerActions button,
+:root[data-theme='light'] .iconBtn{background:#f6f8f8;border-color:#dce4e6}
+:root[data-theme='light'] .headerActions button:hover,
+:root[data-theme='light'] .iconBtn:hover{background:#edf3f3;border-color:#cadadb}
+
+:root[data-theme='light'] .categoryCard,
+:root[data-theme='light'] .productCard,
+:root[data-theme='light'] .shopLayout aside,
+:root[data-theme='light'] .errorState,
+:root[data-theme='light'] .emptyCart,
+:root[data-theme='light'] .infoCards>div,
+:root[data-theme='light'] .orders article,
+:root[data-theme='light'] .accountMenu button,
+:root[data-theme='light'] .cartItems article,
+:root[data-theme='light'] .cartSummary{background:#f8faf9;border-color:#dce4e6}
+
+:root[data-theme='light'] .categoryCard:hover,
+:root[data-theme='light'] .productCard:hover,
+:root[data-theme='light'] .accountMenu button:hover{background:#fbfcfb;border-color:#c6ddd9}
+
+:root[data-theme='light'] .categoryCard>span{background:#e2f1ef}
+:root[data-theme='light'] .benefitWrap{background:#e2eaeb;border:1px solid #d6e1e2}
+:root[data-theme='light'] .productVisual,
+:root[data-theme='light'] .cartVisual{background:linear-gradient(145deg,#e7eeee,#f2f5f4)}
+:root[data-theme='light'] .productVisual>b{background:#f8ead0}
+:root[data-theme='light'] .tierHint,
+:root[data-theme='light'] .filterNote{background:#e3f0ee;color:#2b716b}
+:root[data-theme='light'] .addBtn{background:#f6f9f8;border-color:#bfded9}
+
+:root[data-theme='light'] .shopHero{background:linear-gradient(135deg,#dfecea,#edf1f2);border-color:#d4e1e1}
+:root[data-theme='light'] .shopLayout select,
+:root[data-theme='light'] .mobileFilters select{background:#f4f7f6;border-color:#d6e0e2;color:#4f606b}
+
+:root[data-theme='light'] .detailVisual{background:linear-gradient(145deg,#e5eeee,#f0f4f3)!important;border-color:#d9e3e4!important}
+:root[data-theme='light'] .tiers{background:#f1f5f4!important;border-color:#dce4e6!important}
+:root[data-theme='light'] .tiers>div{border-color:#dce4e6!important}
+:root[data-theme='light'] .qty button{background:#f3f6f5!important;border-color:#d5dfe1!important}
+
+:root[data-theme='light'] .tabs button{background:#f4f7f6;border-color:#dce4e6;color:#667580}
+:root[data-theme='light'] .tabs button.active{background:#e1efed;border-color:#b9d8d4;color:#197b70}
+:root[data-theme='light'] .accountHero{background:linear-gradient(135deg,#dce9e8,#e7eeef)!important}
+
+:root[data-theme='light'] footer{background:#e5ebec!important;border-color:#d3dddf!important;color:#61717b}
+:root[data-theme='light'] .mobileNav{background:rgba(244,247,247,.96)!important;border-color:#d7e0e2!important;box-shadow:0 -8px 26px rgba(16,42,67,.06)}
+
+:root[data-theme='light'] .skeleton i,
+:root[data-theme='light'] .skImg{background:linear-gradient(90deg,#e2e8e9,#edf1f1,#e2e8e9);background-size:200% 100%}
+
+:root[data-theme='light'] .promoBadge{background:#f0f3f2}
+:root[data-theme='light'] .floatingStat,
+:root[data-theme='light'] .floatingBox{background:#f3f7f6}
+
+:root[data-theme='light'] *{scrollbar-color:#a9b8bd #e4eaeb}
