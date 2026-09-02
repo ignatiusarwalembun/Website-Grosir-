@@ -1,13 +1,25 @@
+const categoryPhotos = {
+  sembako: 'https://images.unsplash.com/photo-1604719312566-8912e9227c6a?auto=format&fit=crop&w=1200&q=82',
+  minuman: 'https://images.unsplash.com/photo-1630459065556-cd24ea585ba3?auto=format&fit=crop&w=1200&q=82',
+  snack: 'https://images.unsplash.com/photo-1529259266118-cf22737f713f?auto=format&fit=crop&w=1200&q=82',
+  instan: 'https://images.unsplash.com/photo-1496114212242-bac8bd9de53d?auto=format&fit=crop&w=1200&q=82',
+  dapur: 'https://images.unsplash.com/photo-1604719312566-8912e9227c6a?auto=format&fit=crop&w=1200&q=82',
+  kebersihan: 'https://images.unsplash.com/photo-1656214286228-08fdbf520d1e?auto=format&fit=crop&w=1200&q=82',
+  personal: 'https://images.unsplash.com/photo-1562731789-8324cbe28333?auto=format&fit=crop&w=1200&q=82',
+  frozen: 'https://images.unsplash.com/photo-1529259266118-cf22737f713f?auto=format&fit=crop&w=1200&q=82',
+  usaha: 'https://images.unsplash.com/photo-1574422731048-f09094773986?auto=format&fit=crop&w=1200&q=82'
+};
+
 export const categories = [
-  { id: 'sembako', name: 'Sembako', icon: 'PackageOpen', description: 'Beras, gula, tepung dan kebutuhan pokok' },
-  { id: 'minuman', name: 'Minuman', icon: 'CupSoda', description: 'Air mineral, susu dan minuman siap jual' },
-  { id: 'snack', name: 'Snack', icon: 'Cookie', description: 'Camilan untuk rak toko dan reseller' },
-  { id: 'instan', name: 'Makanan Instan', icon: 'Soup', description: 'Mie dan makanan praktis' },
-  { id: 'dapur', name: 'Kebutuhan Dapur', icon: 'CookingPot', description: 'Bumbu, kecap, saus dan kebutuhan masak' },
-  { id: 'kebersihan', name: 'Kebersihan', icon: 'Sparkles', description: 'Detergen, sabun dan tissue' },
-  { id: 'personal', name: 'Personal Care', icon: 'Heart', description: 'Kebutuhan perawatan harian' },
-  { id: 'frozen', name: 'Frozen Food', icon: 'Snowflake', description: 'Stok makanan beku usaha' },
-  { id: 'usaha', name: 'Perlengkapan Usaha', icon: 'Store', description: 'Kebutuhan operasional bisnis' }
+  { id: 'sembako', name: 'Sembako', icon: 'PackageOpen', description: 'Beras, gula, tepung dan kebutuhan pokok', image: categoryPhotos.sembako },
+  { id: 'minuman', name: 'Minuman', icon: 'CupSoda', description: 'Air mineral, susu dan minuman siap jual', image: categoryPhotos.minuman },
+  { id: 'snack', name: 'Snack', icon: 'Cookie', description: 'Camilan untuk rak toko dan reseller', image: categoryPhotos.snack },
+  { id: 'instan', name: 'Makanan Instan', icon: 'Soup', description: 'Mie dan makanan praktis', image: categoryPhotos.instan },
+  { id: 'dapur', name: 'Kebutuhan Dapur', icon: 'CookingPot', description: 'Bumbu, kecap, saus dan kebutuhan masak', image: categoryPhotos.dapur },
+  { id: 'kebersihan', name: 'Kebersihan', icon: 'Sparkles', description: 'Detergen, sabun dan tissue', image: categoryPhotos.kebersihan },
+  { id: 'personal', name: 'Personal Care', icon: 'Heart', description: 'Kebutuhan perawatan harian', image: categoryPhotos.personal },
+  { id: 'frozen', name: 'Frozen Food', icon: 'Snowflake', description: 'Stok makanan beku usaha', image: categoryPhotos.frozen },
+  { id: 'usaha', name: 'Perlengkapan Usaha', icon: 'Store', description: 'Kebutuhan operasional bisnis', image: categoryPhotos.usaha }
 ];
 
 const products = [
@@ -30,7 +42,7 @@ const products = [
 ];
 
 export const productData = products.map((p, idx) => ({
-  id: p[0], name: p[1], category: p[2], unit: p[3], price: p[4], wholesalePrice: p[5], discount: p[6], minOrder: p[7], tag: p[8], emoji: p[9],
+  id: p[0], name: p[1], category: p[2], unit: p[3], price: p[4], wholesalePrice: p[5], discount: p[6], minOrder: p[7], tag: p[8], emoji: p[9], image: categoryPhotos[p[2]],
   stock: idx % 6 === 0 ? 18 : 40 + idx * 5,
   featured: idx < 8,
   createdAt: `2026-08-${String(10 + idx).padStart(2,'0')}`,
