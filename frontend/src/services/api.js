@@ -10,5 +10,6 @@ export const api = {
   categories: () => request('/api/categories'),
   promos: () => request('/api/promos'),
   orders: () => request('/api/orders'),
-  cart: item => request('/api/cart', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(item) })
+  cart: item => request('/api/cart', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(item) }),
+  checkout: order => request('/api/checkout', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(order) })
 };
