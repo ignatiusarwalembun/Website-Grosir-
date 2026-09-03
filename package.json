@@ -1,0 +1,13 @@
+{
+  "name": "grosirhub-hostinger",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "postinstall": "npm --prefix frontend install && npm --prefix frontend run build",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0"
+  }
+}
