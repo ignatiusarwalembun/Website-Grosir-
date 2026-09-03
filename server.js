@@ -6,8 +6,9 @@ import { categories, productData, promos, orders } from './backend/src/data.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3000;
+const OPERATIONAL_API_URL = (process.env.OPERATIONAL_API_URL || 'https://grosirhub-operational-production.up.railway.app').replace(/\/$/, '');
 
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
 app.get('/api/products', (req, res) => {
@@ -33,6 +34,22 @@ app.get('/api/categories', (_req, res) => res.json(categories));
 app.get('/api/promos', (_req, res) => res.json(promos));
 app.get('/api/orders', (_req, res) => res.json(orders));
 app.post('/api/cart', (req, res) => res.status(201).json({ status: 'ok', item: req.body }));
+
+app.post('/api/checkout', async (req, res) => {
+  try {
+    const response = await fetch(`${OPERATIONAL_API_URL}/api/orders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body)
+    });
+    const payload = await response.json().catch(() => ({ message: 'Operational response invalid' }));
+    if (!response.ok) return res.status(response.status).json(payload);
+    res.status(201).json(payload);
+  } catch (error) {
+    console.error('Operational checkout error:', error.message);
+    res.status(502).json({ message: 'Website operational sedang tidak dapat dihubungi' });
+  }
+});
 
 const distDir = path.join(__dirname, 'frontend', 'dist');
 app.use(express.static(distDir));
