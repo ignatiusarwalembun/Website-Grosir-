@@ -1,7 +1,11 @@
 const API_URL = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 async function request(path, options) {
   const res = await fetch(`${API_URL}${path}`, options);
-  if (!res.ok) throw new Error(`API ${res.status}`);
+  if (!res.ok) {
+    const error = new Error(`API ${res.status}`);
+    error.status = res.status;
+    throw error;
+  }
   return res.json();
 }
 export const api = {
@@ -11,5 +15,6 @@ export const api = {
   promos: () => request('/api/promos'),
   orders: () => request('/api/orders'),
   cart: item => request('/api/cart', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(item) }),
-  checkout: order => request('/api/checkout', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(order) })
+  checkout: order => request('/api/checkout', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(order) }),
+  orderStatus: (id, phone) => request(`/api/order-status/${encodeURIComponent(id)}?phone=${encodeURIComponent(phone)}`)
 };
