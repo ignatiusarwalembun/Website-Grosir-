@@ -18,6 +18,8 @@ export const api = {
   orders: () => request('/api/orders'),
   cart: item => request('/api/cart', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(item) }),
   validateReferral: (code, subtotal) => request(`/api/referrals/validate?code=${encodeURIComponent(code)}&subtotal=${encodeURIComponent(subtotal)}`),
+  paymentConfig: () => request('/api/payment/config'),
+  createPayment: order => request('/api/payment/create', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(order) }),
   checkout: order => request('/api/checkout', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(order) }),
   orderStatus: (id, phone) => request(`/api/order-status/${encodeURIComponent(id)}?phone=${encodeURIComponent(phone)}`)
 };
