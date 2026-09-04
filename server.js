@@ -51,6 +51,22 @@ app.get('/api/products/:id', async (req, res) => {
   }
 });
 
+app.get('/api/referrals/validate', async (req, res) => {
+  try {
+    const query = new URLSearchParams({
+      code: String(req.query.code || ''),
+      subtotal: String(req.query.subtotal || 0)
+    }).toString();
+    const response = await fetch(`${OPERATIONAL_API_URL}/api/referrals/validate?${query}`);
+    const payload = await response.json().catch(() => ({ message: 'Kode referensi tidak valid' }));
+    if (!response.ok) return res.status(response.status).json(payload);
+    res.json(payload);
+  } catch (error) {
+    console.error('Operational referral validation error:', error.message);
+    res.status(502).json({ message: 'Kode referensi sementara tidak dapat diperiksa' });
+  }
+});
+
 app.get('/api/categories', (_req, res) => res.json(categories));
 app.get('/api/promos', (_req, res) => res.json(promos));
 app.get('/api/orders', (_req, res) => res.json(orders));
