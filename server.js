@@ -9,7 +9,6 @@ const PORT = process.env.PORT || 3000;
 const OPERATIONAL_API_URL = (process.env.OPERATIONAL_API_URL || 'https://grosirhub-operational-production.up.railway.app').replace(/\/$/, '');
 
 app.use(express.json({ limit: '1mb' }));
-
 app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
 
 function fallbackProducts(query = {}) {
@@ -23,6 +22,11 @@ function fallbackProducts(query = {}) {
   if (sort === 'newest') data.sort((a,b) => b.createdAt.localeCompare(a.createdAt));
   if (sort === 'popular') data.sort((a,b) => Number(b.featured) - Number(a.featured));
   return data;
+}
+async function operationalJson(pathname, options) {
+  const response = await fetch(`${OPERATIONAL_API_URL}${pathname}`, options);
+  const payload = await response.json().catch(() => ({ message: 'Operational response invalid' }));
+  return { response, payload };
 }
 
 app.get('/api/products', async (req, res) => {
@@ -57,13 +61,38 @@ app.get('/api/referrals/validate', async (req, res) => {
       code: String(req.query.code || ''),
       subtotal: String(req.query.subtotal || 0)
     }).toString();
-    const response = await fetch(`${OPERATIONAL_API_URL}/api/referrals/validate?${query}`);
-    const payload = await response.json().catch(() => ({ message: 'Kode referensi tidak valid' }));
+    const { response, payload } = await operationalJson(`/api/referrals/validate?${query}`);
     if (!response.ok) return res.status(response.status).json(payload);
     res.json(payload);
   } catch (error) {
     console.error('Operational referral validation error:', error.message);
     res.status(502).json({ message: 'Kode referensi sementara tidak dapat diperiksa' });
+  }
+});
+
+app.get('/api/payment/config', async (_req, res) => {
+  try {
+    const { response, payload } = await operationalJson('/api/payment/config');
+    if (!response.ok) return res.status(response.status).json(payload);
+    res.json(payload);
+  } catch (error) {
+    console.error('Operational payment config error:', error.message);
+    res.json({ configured: false, environment: 'sandbox' });
+  }
+});
+
+app.post('/api/payment/create', async (req, res) => {
+  try {
+    const { response, payload } = await operationalJson('/api/payment/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body)
+    });
+    if (!response.ok) return res.status(response.status).json(payload);
+    res.status(201).json(payload);
+  } catch (error) {
+    console.error('Operational Midtrans payment error:', error.message);
+    res.status(502).json({ message: 'Layanan pembayaran sementara tidak dapat dihubungi' });
   }
 });
 
@@ -74,12 +103,11 @@ app.post('/api/cart', (req, res) => res.status(201).json({ status: 'ok', item: r
 
 app.post('/api/checkout', async (req, res) => {
   try {
-    const response = await fetch(`${OPERATIONAL_API_URL}/api/orders`, {
+    const { response, payload } = await operationalJson('/api/orders', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req.body)
     });
-    const payload = await response.json().catch(() => ({ message: 'Operational response invalid' }));
     if (!response.ok) return res.status(response.status).json(payload);
     res.status(201).json(payload);
   } catch (error) {
@@ -91,8 +119,7 @@ app.post('/api/checkout', async (req, res) => {
 app.get('/api/order-status/:id', async (req, res) => {
   try {
     const phone = String(req.query.phone || '');
-    const response = await fetch(`${OPERATIONAL_API_URL}/api/public/orders/${encodeURIComponent(req.params.id)}?phone=${encodeURIComponent(phone)}`);
-    const payload = await response.json().catch(() => ({ message: 'Pesanan tidak ditemukan' }));
+    const { response, payload } = await operationalJson(`/api/public/orders/${encodeURIComponent(req.params.id)}?phone=${encodeURIComponent(phone)}`);
     if (!response.ok) return res.status(response.status).json(payload);
     res.json(payload);
   } catch (error) {
