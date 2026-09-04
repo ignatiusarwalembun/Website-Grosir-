@@ -12,6 +12,7 @@ const steps = [
 ];
 
 const normalize = status => {
+  if (status === 'MENUNGGU_PEMBAYARAN') return 'MENUNGGU_VERIFIKASI';
   if (status === 'MENUNGGU_KONFIRMASI') return 'MENUNGGU_VERIFIKASI';
   if (status === 'DIPROSES') return 'SEDANG_DISIAPKAN';
   return status || 'MENUNGGU_VERIFIKASI';
@@ -51,12 +52,13 @@ export default function OrderStatus(){
 
   const currentStatus = normalize(order?.orderStatus);
   const currentIndex = Math.max(0, steps.findIndex(s=>s.key===currentStatus));
+  const waitingForPayment = order?.orderStatus==='MENUNGGU_PEMBAYARAN' || order?.paymentStatus==='MENUNGGU_PEMBAYARAN';
 
   return <div className="page">
     <div className="shopHero compact">
       <span>STATUS PESANAN</span>
       <h1>Pantau perjalanan pesanan Anda.</h1>
-      <p>Masukkan ID pesanan dan nomor telepon yang digunakan saat checkout. Status akan diperbarui otomatis mengikuti proses dari tim operasional.</p>
+      <p>Masukkan ID pesanan dan nomor telepon yang digunakan saat checkout. Status akan diperbarui otomatis mengikuti pembayaran dan proses dari tim operasional.</p>
     </div>
 
     <div style={styles.lookup}>
@@ -73,11 +75,11 @@ export default function OrderStatus(){
         <div style={styles.total}><span>Total</span><b>{rupiah(order.subtotal)}</b></div>
       </div>
 
-      {order.orderStatus==='DIBATALKAN' ? <div style={styles.cancelled}><b>Pesanan Dibatalkan</b><span>Pembayaran tidak dapat diverifikasi atau pesanan dibatalkan oleh tim operasional.</span></div> : <>
+      {order.orderStatus==='DIBATALKAN' ? <div style={styles.cancelled}><b>Pesanan Dibatalkan</b><span>Pembayaran tidak berhasil diselesaikan atau pesanan dibatalkan.</span></div> : <>
         <div style={styles.progressLine}><div style={{...styles.progressFill,width:`${(currentIndex/(steps.length-1))*100}%`}}/></div>
-        <div style={styles.steps}>{steps.map((step,index)=>{const Icon=step.icon;const active=index<=currentIndex;const current=index===currentIndex;return <div key={step.key} style={styles.step}>
+        <div style={styles.steps}>{steps.map((step,index)=>{const Icon=step.icon;const active=index<=currentIndex;const current=index===currentIndex;const title=index===0&&waitingForPayment?'Menunggu Pembayaran':step.title;const desc=index===0&&waitingForPayment?'Pesanan sudah dibuat dan sedang menunggu penyelesaian pembayaran melalui Midtrans. Status akan berubah otomatis setelah pembayaran terkonfirmasi.':step.desc;return <div key={step.key} style={styles.step}>
           <div style={{...styles.iconCircle,background:active?'var(--teal)':'#eef2f4',color:active?'#fff':'#94a3b8',boxShadow:current?'0 0 0 5px rgba(20,184,166,.12)':'none'}}><Icon size={20}/></div>
-          <div><b style={{...styles.stepTitle,color:active?'var(--navy)':'#94a3b8'}}>{step.title}</b><p style={styles.stepDesc}>{step.desc}</p></div>
+          <div><b style={{...styles.stepTitle,color:active?'var(--navy)':'#94a3b8'}}>{title}</b><p style={styles.stepDesc}>{desc}</p></div>
         </div>})}</div>
       </>}
 
