@@ -6,10 +6,17 @@ import { categories, productData, promos, orders } from './backend/src/data.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3000;
-const OPERATIONAL_API_URL = (process.env.OPERATIONAL_API_URL || 'https://grosirhub-operational-production.up.railway.app').replace(/\/$/, '');
+
+const HOSTINGER_OPERATIONAL_URL = 'https://floralwhite-lemur-589014.hostingersite.com';
+const configuredOperationalUrl = String(process.env.OPERATIONAL_API_URL || '').trim();
+const OPERATIONAL_API_URL = (
+  configuredOperationalUrl && !configuredOperationalUrl.includes('grosirhub-operational-production.up.railway.app')
+    ? configuredOperationalUrl
+    : HOSTINGER_OPERATIONAL_URL
+).replace(/\/$/, '');
 
 app.use(express.json({ limit: '1mb' }));
-app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
+app.get('/api/health', (_req, res) => res.json({ status: 'ok', operational: OPERATIONAL_API_URL }));
 
 function fallbackProducts(query = {}) {
   let data = [...productData];
@@ -23,6 +30,7 @@ function fallbackProducts(query = {}) {
   if (sort === 'popular') data.sort((a,b) => Number(b.featured) - Number(a.featured));
   return data;
 }
+
 async function operationalJson(pathname, options) {
   const response = await fetch(`${OPERATIONAL_API_URL}${pathname}`, options);
   const payload = await response.json().catch(() => ({ message: 'Operational response invalid' }));
@@ -134,4 +142,5 @@ app.use((_req, res) => res.sendFile(path.join(distDir, 'index.html')));
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`GrosirHub fullstack listening on ${PORT}`);
+  console.log(`Operational backend: ${OPERATIONAL_API_URL}`);
 });
