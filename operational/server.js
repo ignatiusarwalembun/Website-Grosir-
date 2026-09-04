@@ -1,6 +1,7 @@
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import * as XLSX from 'xlsx';
 import { seedProducts } from './products.seed.js';
@@ -12,6 +13,14 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'grosirhub-admin';
 const ORDERS_FILE = process.env.ORDERS_FILE || path.join(__dirname, 'orders.json');
 const PRODUCTS_FILE = process.env.PRODUCTS_FILE || path.join(__dirname, 'products.json');
 const REFERRALS_FILE = process.env.REFERRALS_FILE || path.join(__dirname, 'referrals.json');
+const MIDTRANS_SERVER_KEY = String(process.env.MIDTRANS_SERVER_KEY || '').trim();
+const MIDTRANS_CLIENT_KEY = String(process.env.MIDTRANS_CLIENT_KEY || '').trim();
+const MIDTRANS_IS_PRODUCTION = String(process.env.MIDTRANS_IS_PRODUCTION || 'false').toLowerCase() === 'true';
+const MIDTRANS_NOTIFICATION_URL = String(
+  process.env.MIDTRANS_NOTIFICATION_URL ||
+  'https://grosirhub-operational-production.up.railway.app/api/midtrans/notification'
+).trim();
+const MIDTRANS_APP_BASE = MIDTRANS_IS_PRODUCTION ? 'https://app.midtrans.com' : 'https://app.sandbox.midtrans.com';
 
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false }));
@@ -71,8 +80,11 @@ const digits = value => String(value || '').replace(/\D/g, '');
 const slug = value => String(value || 'produk').toLowerCase().normalize('NFKD')
   .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 70) || `produk-${Date.now()}`;
 const referralCode = value => String(value || '').trim().toUpperCase().replace(/\s+/g, '');
+const paymentConfigured = () => Boolean(MIDTRANS_SERVER_KEY && MIDTRANS_CLIENT_KEY);
+const makeOrderId = () => `ORD-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
 const STATUS_LABELS = {
+  MENUNGGU_PEMBAYARAN: 'Menunggu Pembayaran',
   MENUNGGU_VERIFIKASI: 'Menunggu Verifikasi Pembayaran',
   MENUNGGU_KONFIRMASI: 'Menunggu Konfirmasi',
   DIPROSES: 'Pesanan Sedang Disiapkan',
@@ -87,7 +99,7 @@ function normalizeView(value) {
   return new Set(['semua', 'menunggu', 'diproses', 'selesai']).has(value) ? value : 'semua';
 }
 function filterOrders(orders, view) {
-  if (view === 'menunggu') return orders.filter(o => ['MENUNGGU_VERIFIKASI', 'MENUNGGU_KONFIRMASI'].includes(o.orderStatus));
+  if (view === 'menunggu') return orders.filter(o => ['MENUNGGU_PEMBAYARAN', 'MENUNGGU_VERIFIKASI', 'MENUNGGU_KONFIRMASI'].includes(o.orderStatus));
   if (view === 'diproses') return orders.filter(o => ['DIPROSES', 'SEDANG_DISIAPKAN', 'SIAP_DIKIRIM', 'DALAM_PENGANTARAN'].includes(o.orderStatus));
   if (view === 'selesai') return orders.filter(o => o.orderStatus === 'SELESAI');
   return orders;
@@ -109,6 +121,7 @@ function publicOrder(o) {
     referralCode: o.referralCode || '',
     paymentMethod: o.paymentMethod || '',
     paymentStatus: o.paymentStatus || '',
+    midtransTransactionStatus: o.midtransTransactionStatus || '',
     orderStatus: o.orderStatus || 'MENUNGGU_VERIFIKASI'
   };
 }
@@ -180,6 +193,139 @@ function resolveReferral(code, subtotal) {
     message: 'Kode referensi berhasil digunakan.'
   };
 }
+function buildOrder(body, options = {}) {
+  const { customer, items } = body || {};
+  if (!customer?.name || !customer?.phone || !customer?.address || !Array.isArray(items) || !items.length) {
+    const err = new Error('Data pesanan belum lengkap');
+    err.status = 400;
+    throw err;
+  }
+  const products = readProducts();
+  const productMap = new Map(products.map(p => [String(p.id), p]));
+  const normalizedItems = items.map(raw => {
+    const product = productMap.get(String(raw.id));
+    if (!product) {
+      const err = new Error(`Produk ${String(raw.name || raw.id || '')} tidak ditemukan`);
+      err.status = 400;
+      throw err;
+    }
+    const quantity = Math.max(1, Math.floor(Number(raw.quantity) || 1));
+    return {
+      id: product.id,
+      name: product.name,
+      quantity,
+      wholesalePrice: Math.max(0, Math.round(Number(product.wholesalePrice) || 0))
+    };
+  });
+  const originalSubtotal = normalizedItems.reduce((sum, item) => sum + item.wholesalePrice * item.quantity, 0);
+  const requestedCode = referralCode(body.referralCode);
+  let appliedReferral = null;
+  if (requestedCode) {
+    const result = resolveReferral(requestedCode, originalSubtotal);
+    if (!result.valid) {
+      const err = new Error(result.message);
+      err.status = 400;
+      throw err;
+    }
+    appliedReferral = result;
+  }
+  const discountAmount = appliedReferral?.discountAmount || 0;
+  const finalTotal = Math.max(0, originalSubtotal - discountAmount);
+  return {
+    order: {
+      id: options.id || makeOrderId(),
+      createdAt: new Date().toISOString(),
+      customer: {
+        name: String(customer.name).trim(),
+        phone: String(customer.phone).trim(),
+        address: String(customer.address).trim()
+      },
+      items: normalizedItems,
+      originalSubtotal,
+      discountAmount,
+      subtotal: finalTotal,
+      referralCode: appliedReferral?.code || '',
+      referralId: appliedReferral?.id || '',
+      paymentMethod: options.paymentMethod || String(body.paymentMethod || 'Manual'),
+      paymentStatus: options.paymentStatus || 'MENUNGGU_VERIFIKASI',
+      orderStatus: options.orderStatus || 'MENUNGGU_VERIFIKASI'
+    },
+    appliedReferral
+  };
+}
+function recordReferralUsage(order) {
+  if (!order?.referralId || order.referralCountedAt) return order;
+  const refs = readReferrals();
+  const index = refs.findIndex(r => r.id === order.referralId);
+  if (index >= 0) {
+    refs[index].usageCount = (Number(refs[index].usageCount) || 0) + 1;
+    refs[index].updatedAt = new Date().toISOString();
+    writeReferrals(refs);
+    order.referralCountedAt = new Date().toISOString();
+  }
+  return order;
+}
+function midtransItemDetails(order) {
+  const details = order.items.map((item, index) => ({
+    id: String(item.id || `ITEM-${index + 1}`).slice(0, 50),
+    price: Math.round(Number(item.wholesalePrice) || 0),
+    quantity: Math.max(1, Math.floor(Number(item.quantity) || 1)),
+    name: String(item.name || 'Produk').replaceAll('|', '/').slice(0, 50)
+  }));
+  if (order.discountAmount > 0) {
+    details.push({
+      id: `DISC-${String(order.referralCode || 'REF').slice(0, 40)}`,
+      price: -Math.round(order.discountAmount),
+      quantity: 1,
+      name: `Diskon ${String(order.referralCode || 'Referensi')}`.slice(0, 50)
+    });
+  }
+  return details;
+}
+async function createMidtransTransaction(order) {
+  const headers = {
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+    Authorization: `Basic ${Buffer.from(`${MIDTRANS_SERVER_KEY}:`).toString('base64')}`
+  };
+  if (MIDTRANS_NOTIFICATION_URL) headers['X-Override-Notification'] = MIDTRANS_NOTIFICATION_URL;
+  const response = await fetch(`${MIDTRANS_APP_BASE}/snap/v1/transactions`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      transaction_details: {
+        order_id: order.id,
+        gross_amount: Math.round(order.subtotal)
+      },
+      item_details: midtransItemDetails(order),
+      customer_details: {
+        first_name: order.customer.name.slice(0, 50),
+        phone: order.customer.phone.slice(0, 30),
+        shipping_address: {
+          first_name: order.customer.name.slice(0, 50),
+          phone: order.customer.phone.slice(0, 30),
+          address: order.customer.address.slice(0, 200),
+          country_code: 'IDN'
+        }
+      }
+    })
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload.token) {
+    const err = new Error(payload.error_messages?.join(', ') || payload.status_message || 'Midtrans gagal membuat transaksi');
+    err.status = 502;
+    throw err;
+  }
+  return payload;
+}
+function validMidtransSignature(body) {
+  if (!MIDTRANS_SERVER_KEY || !body?.signature_key) return false;
+  const source = `${body.order_id || ''}${body.status_code || ''}${body.gross_amount || ''}${MIDTRANS_SERVER_KEY}`;
+  const expected = crypto.createHash('sha512').update(source).digest('hex');
+  const actual = String(body.signature_key);
+  if (expected.length !== actual.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(actual));
+}
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
 
@@ -209,6 +355,13 @@ app.get('/api/referrals/validate', (req, res) => {
   res.json(result);
 });
 
+app.get('/api/payment/config', (_req, res) => {
+  res.json({
+    configured: paymentConfigured(),
+    environment: MIDTRANS_IS_PRODUCTION ? 'production' : 'sandbox'
+  });
+});
+
 app.get('/api/public/orders/:id', (req, res) => {
   const phone = digits(req.query.phone);
   const order = readOrders().find(x => x.id === req.params.id);
@@ -218,63 +371,117 @@ app.get('/api/public/orders/:id', (req, res) => {
   res.json(publicOrder(order));
 });
 
-app.post('/api/orders', (req, res) => {
-  const { customer, items, paymentMethod } = req.body || {};
-  if (!customer?.name || !customer?.phone || !Array.isArray(items) || !items.length || !paymentMethod) {
-    return res.status(400).json({ message: 'Data pesanan belum lengkap' });
+app.post('/api/payment/create', async (req, res) => {
+  if (!paymentConfigured()) {
+    return res.status(503).json({
+      code: 'MIDTRANS_NOT_CONFIGURED',
+      message: 'Midtrans belum dikonfigurasi. Checkout manual tetap tersedia.'
+    });
   }
+  try {
+    const { order } = buildOrder(req.body, {
+      paymentMethod: 'Midtrans Snap',
+      paymentStatus: 'MENUNGGU_PEMBAYARAN',
+      orderStatus: 'MENUNGGU_PEMBAYARAN'
+    });
 
-  const normalizedItems = items.map(item => ({
-    id: item.id,
-    name: item.name,
-    quantity: Math.max(1, Number(item.quantity) || 1),
-    wholesalePrice: Math.max(0, Number(item.wholesalePrice) || 0)
-  }));
-  const originalSubtotal = normalizedItems.reduce((sum, item) => sum + item.wholesalePrice * item.quantity, 0);
-
-  let appliedReferral = null;
-  const requestedCode = referralCode(req.body.referralCode);
-  if (requestedCode) {
-    const result = resolveReferral(requestedCode, originalSubtotal);
-    if (!result.valid) return res.status(400).json({ message: result.message });
-    appliedReferral = result;
-  }
-
-  const discountAmount = appliedReferral?.discountAmount || 0;
-  const finalTotal = Math.max(0, originalSubtotal - discountAmount);
-  const orders = readOrders();
-  const order = {
-    id: `ORD-${Date.now().toString(36).toUpperCase()}`,
-    createdAt: new Date().toISOString(),
-    customer: {
-      name: String(customer.name).trim(),
-      phone: String(customer.phone).trim(),
-      address: String(customer.address || '').trim()
-    },
-    items: normalizedItems,
-    originalSubtotal,
-    discountAmount,
-    subtotal: finalTotal,
-    referralCode: appliedReferral?.code || '',
-    paymentMethod: String(paymentMethod),
-    paymentStatus: 'MENUNGGU_VERIFIKASI',
-    orderStatus: 'MENUNGGU_VERIFIKASI'
-  };
-  orders.unshift(order);
-  writeOrders(orders);
-
-  if (appliedReferral?.id) {
-    const refs = readReferrals();
-    const index = refs.findIndex(r => r.id === appliedReferral.id);
-    if (index >= 0) {
-      refs[index].usageCount = (Number(refs[index].usageCount) || 0) + 1;
-      refs[index].updatedAt = new Date().toISOString();
-      writeReferrals(refs);
+    if (order.subtotal <= 0) {
+      order.paymentMethod = 'Kode Referensi';
+      order.paymentStatus = 'TERVERIFIKASI';
+      order.orderStatus = 'SEDANG_DISIAPKAN';
+      recordReferralUsage(order);
+      const orders = readOrders();
+      orders.unshift(order);
+      writeOrders(orders);
+      return res.status(201).json({ status: 'ok', freeOrder: true, order: publicOrder(order) });
     }
+
+    const snap = await createMidtransTransaction(order);
+    order.midtransTransactionStatus = 'created';
+    order.midtransRedirectUrl = snap.redirect_url || '';
+    order.updatedAt = new Date().toISOString();
+    const orders = readOrders();
+    orders.unshift(order);
+    writeOrders(orders);
+
+    res.status(201).json({
+      status: 'ok',
+      order: publicOrder(order),
+      token: snap.token,
+      redirectUrl: snap.redirect_url || '',
+      clientKey: MIDTRANS_CLIENT_KEY,
+      snapJsUrl: `${MIDTRANS_APP_BASE}/snap/snap.js`,
+      environment: MIDTRANS_IS_PRODUCTION ? 'production' : 'sandbox'
+    });
+  } catch (error) {
+    console.error('Midtrans create transaction error:', error.message);
+    res.status(error.status || 500).json({ message: error.message || 'Pembayaran belum dapat dibuat' });
+  }
+});
+
+app.post('/api/midtrans/notification', (req, res) => {
+  if (!paymentConfigured()) return res.status(503).json({ message: 'Midtrans belum dikonfigurasi' });
+  if (!validMidtransSignature(req.body)) return res.status(403).json({ message: 'Signature Midtrans tidak valid' });
+
+  const orders = readOrders();
+  const index = orders.findIndex(o => o.id === req.body.order_id);
+  if (index < 0) return res.status(404).json({ message: 'Order tidak ditemukan' });
+
+  const order = orders[index];
+  const notifiedAmount = Math.round(Number(req.body.gross_amount) || 0);
+  if (notifiedAmount !== Math.round(Number(order.subtotal) || 0)) {
+    return res.status(400).json({ message: 'Nominal pembayaran tidak cocok' });
   }
 
-  console.log(`Order received: ${order.id} - ${order.customer.name}`);
-  res.status(201).json({ status: 'ok', order });
+  const status = String(req.body.transaction_status || '').toLowerCase();
+  const fraud = String(req.body.fraud_status || '').toLowerCase();
+  const wasPaid = order.paymentStatus === 'TERVERIFIKASI';
+  const paid = status === 'settlement' || (status === 'capture' && (!fraud || fraud === 'accept'));
+  const failed = ['deny', 'cancel', 'expire', 'failure'].includes(status) || (status === 'capture' && fraud === 'deny');
+
+  order.midtransTransactionStatus = status;
+  order.midtransTransactionId = String(req.body.transaction_id || order.midtransTransactionId || '');
+  order.midtransFraudStatus = String(req.body.fraud_status || order.midtransFraudStatus || '');
+  if (req.body.payment_type) order.paymentMethod = `Midtrans · ${String(req.body.payment_type).replaceAll('_', ' ')}`;
+
+  if (paid) {
+    order.paymentStatus = 'TERVERIFIKASI';
+    if (['MENUNGGU_PEMBAYARAN', 'MENUNGGU_VERIFIKASI', 'MENUNGGU_KONFIRMASI'].includes(order.orderStatus)) {
+      order.orderStatus = 'SEDANG_DISIAPKAN';
+    }
+    if (!wasPaid) recordReferralUsage(order);
+  } else if (failed && !wasPaid) {
+    order.paymentStatus = 'DITOLAK';
+    order.orderStatus = 'DIBATALKAN';
+  } else if (!wasPaid) {
+    order.paymentStatus = 'MENUNGGU_PEMBAYARAN';
+    order.orderStatus = 'MENUNGGU_PEMBAYARAN';
+  }
+
+  order.updatedAt = new Date().toISOString();
+  orders[index] = order;
+  writeOrders(orders);
+  console.log(`Midtrans notification: ${order.id} -> ${status}`);
+  res.json({ status: 'ok' });
+});
+
+app.post('/api/orders', (req, res) => {
+  try {
+    if (!req.body?.paymentMethod) return res.status(400).json({ message: 'Metode pembayaran wajib dipilih' });
+    const { order } = buildOrder(req.body, {
+      paymentMethod: String(req.body.paymentMethod),
+      paymentStatus: 'MENUNGGU_VERIFIKASI',
+      orderStatus: 'MENUNGGU_VERIFIKASI'
+    });
+    recordReferralUsage(order);
+    const orders = readOrders();
+    orders.unshift(order);
+    writeOrders(orders);
+    console.log(`Manual order received: ${order.id} - ${order.customer.name}`);
+    res.status(201).json({ status: 'ok', order });
+  } catch (error) {
+    res.status(error.status || 500).json({ message: error.message || 'Pesanan belum dapat dibuat' });
+  }
 });
 
 app.get('/api/orders', requireAdmin, (_req, res) => res.json(readOrders()));
@@ -283,8 +490,8 @@ app.patch('/api/orders/:id', requireAdmin, (req, res) => {
   const orders = readOrders();
   const index = orders.findIndex(o => o.id === req.params.id);
   if (index < 0) return res.status(404).json({ message: 'Pesanan tidak ditemukan' });
-  const paymentOptions = new Set(['MENUNGGU_VERIFIKASI', 'TERVERIFIKASI', 'DITOLAK']);
-  const orderOptions = new Set(['MENUNGGU_VERIFIKASI', 'MENUNGGU_KONFIRMASI', 'DIPROSES', 'SEDANG_DISIAPKAN', 'SIAP_DIKIRIM', 'DALAM_PENGANTARAN', 'SELESAI', 'DIBATALKAN']);
+  const paymentOptions = new Set(['MENUNGGU_PEMBAYARAN', 'MENUNGGU_VERIFIKASI', 'TERVERIFIKASI', 'DITOLAK']);
+  const orderOptions = new Set(['MENUNGGU_PEMBAYARAN', 'MENUNGGU_VERIFIKASI', 'MENUNGGU_KONFIRMASI', 'DIPROSES', 'SEDANG_DISIAPKAN', 'SIAP_DIKIRIM', 'DALAM_PENGANTARAN', 'SELESAI', 'DIBATALKAN']);
   if (req.body.paymentStatus && paymentOptions.has(req.body.paymentStatus)) orders[index].paymentStatus = req.body.paymentStatus;
   if (req.body.orderStatus && orderOptions.has(req.body.orderStatus)) orders[index].orderStatus = req.body.orderStatus;
   orders[index].updatedAt = new Date().toISOString();
@@ -391,6 +598,8 @@ function exportRows(orders) {
     'Diskon Referensi': Number(o.discountAmount) || 0,
     'Total Pembayaran': Number(o.subtotal) || 0,
     'Metode Pembayaran': o.paymentMethod || '',
+    'Midtrans Transaction ID': o.midtransTransactionId || '',
+    'Midtrans Status': o.midtransTransactionStatus || '',
     'Status Pembayaran': o.paymentStatus || '',
     'Status Pesanan': o.orderStatus || ''
   }));
@@ -399,7 +608,6 @@ const csvEscape = value => {
   const text = String(value ?? '');
   return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 };
-
 app.get('/export/json', requireAdmin, (req, res) => {
   const view = normalizeView(req.query.view);
   const orders = filterOrders(readOrders(), view);
@@ -412,12 +620,9 @@ app.get('/export/csv', requireAdmin, (req, res) => {
   const headers = rows.length ? Object.keys(rows[0]) : [
     'Order ID', 'Tanggal', 'Nama Pelanggan', 'Telepon', 'Alamat', 'Item', 'Total Item',
     'Subtotal Sebelum Diskon', 'Kode Referensi', 'Diskon Referensi', 'Total Pembayaran',
-    'Metode Pembayaran', 'Status Pembayaran', 'Status Pesanan'
+    'Metode Pembayaran', 'Midtrans Transaction ID', 'Midtrans Status', 'Status Pembayaran', 'Status Pesanan'
   ];
-  const csv = [
-    headers.map(csvEscape).join(','),
-    ...rows.map(row => headers.map(h => csvEscape(row[h])).join(','))
-  ].join('\n');
+  const csv = [headers.map(csvEscape).join(','), ...rows.map(row => headers.map(h => csvEscape(row[h])).join(','))].join('\n');
   res.setHeader('Content-Disposition', `attachment; filename="grosirhub-orders-${view}.csv"`);
   res.type('text/csv; charset=utf-8').send(`\uFEFF${csv}`);
 });
@@ -452,18 +657,15 @@ function actionButtons(order, view) {
   if (order.orderStatus === 'DALAM_PENGANTARAN') buttons.push(actionForm(order.id, 'complete', 'Tandai Selesai', 'done', view));
   return buttons.join('');
 }
-
 function css() {
-  return `:root{font-family:Inter,system-ui,Arial,sans-serif;color:#111827;background:#f5f7fb}*{box-sizing:border-box}body{margin:0}.wrap{max-width:1380px;margin:auto;padding:28px}.top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:22px}.top h1{margin:0;font-size:28px}.top p{margin:6px 0 0;color:#6b7280}.nav{display:flex;gap:8px;flex-wrap:wrap}.nav a,.tab,.exportBtn{display:inline-flex;align-items:center;gap:8px;text-decoration:none;border-radius:10px;font-size:12px;font-weight:800;padding:10px 12px;background:#fff;border:1px solid #d1d5db;color:#374151}.nav a.active,.tab.active{background:#111827;color:#fff;border-color:#111827}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px}.stat,.panel{background:#fff;border:1px solid #e5e7eb;border-radius:16px}.stat{padding:18px}.stat span{font-size:12px;color:#6b7280}.stat b{display:block;font-size:25px;margin-top:6px}.toolbar{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:14px}.tabs,.exports{display:flex;gap:8px;flex-wrap:wrap}.tab b{min-width:20px;height:20px;border-radius:999px;background:#f3f4f6;display:grid;place-items:center;font-size:10px}.tab.active b{background:rgba(255,255,255,.18)}.tableWrap{overflow:auto;background:#fff;border:1px solid #e5e7eb;border-radius:18px}.empty{padding:48px;text-align:center;color:#6b7280}table{width:100%;border-collapse:collapse;min-width:1100px}th,td{text-align:left;padding:14px;border-bottom:1px solid #eef0f3;vertical-align:top}th{font-size:12px;color:#6b7280;background:#fafbfc}td{font-size:13px}.orderId{font-weight:800}.muted{color:#6b7280}.pill,.status{display:inline-block;padding:5px 8px;border-radius:999px;background:#f3f4f6;font-size:11px;font-weight:800;margin-top:6px}.statusProcessing{color:#1d4ed8;background:#eff6ff}.statusCompleted{color:#dc2626;background:#fef2f2}.statusWaiting{color:#92400e;background:#fffbeb}.actions{display:flex;flex-wrap:wrap;gap:6px}.actions form{margin:0}.actions button,.btn{border:0;border-radius:9px;padding:8px 10px;font-weight:750;cursor:pointer;text-decoration:none;display:inline-flex}.ok{background:#dcfce7;color:#166534}.danger{background:#fee2e2;color:#991b1b}.process{background:#dbeafe;color:#1d4ed8}.done{background:#fee2e2;color:#b91c1c}input,select,textarea{width:100%;border:1px solid #d1d5db;border-radius:10px;padding:10px 11px;font:inherit;background:#fff}textarea{min-height:80px;resize:vertical}.field label{display:block;font-size:11px;font-weight:800;margin-bottom:6px;color:#4b5563}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.panel{padding:18px;margin-bottom:16px}.panel h2{margin:0 0 15px;font-size:18px}.save{background:#111827;color:#fff}.productTable img{width:58px;height:58px;object-fit:cover;border-radius:10px;background:#f3f4f6}.check{display:flex;align-items:center;gap:8px}.check input{width:auto}.sectionTitle{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:18px 0 12px}.sectionTitle h2{margin:0}.refCode{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:900;font-size:14px;letter-spacing:.05em}.discount{color:#047857;font-weight:800}.inactive{opacity:.58}@media(max-width:900px){.wrap{padding:16px}.stats{grid-template-columns:repeat(2,1fr)}.top{flex-direction:column}.grid{grid-template-columns:1fr 1fr}}@media(max-width:580px){.grid{grid-template-columns:1fr}}`;
+  return `:root{font-family:Inter,system-ui,Arial,sans-serif;color:#111827;background:#f5f7fb}*{box-sizing:border-box}body{margin:0}.wrap{max-width:1380px;margin:auto;padding:28px}.top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:22px}.top h1{margin:0;font-size:28px}.top p{margin:6px 0 0;color:#6b7280}.nav{display:flex;gap:8px;flex-wrap:wrap}.nav a,.tab,.exportBtn{display:inline-flex;align-items:center;gap:8px;text-decoration:none;border-radius:10px;font-size:12px;font-weight:800;padding:10px 12px;background:#fff;border:1px solid #d1d5db;color:#374151}.nav a.active,.tab.active{background:#111827;color:#fff;border-color:#111827}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px}.stat,.panel{background:#fff;border:1px solid #e5e7eb;border-radius:16px}.stat{padding:18px}.stat span{font-size:12px;color:#6b7280}.stat b{display:block;font-size:25px;margin-top:6px}.toolbar{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:14px}.tabs,.exports{display:flex;gap:8px;flex-wrap:wrap}.tab b{min-width:20px;height:20px;border-radius:999px;background:#f3f4f6;display:grid;place-items:center;font-size:10px}.tab.active b{background:rgba(255,255,255,.18)}.tableWrap{overflow:auto;background:#fff;border:1px solid #e5e7eb;border-radius:18px}.empty{padding:48px;text-align:center;color:#6b7280}table{width:100%;border-collapse:collapse;min-width:1150px}th,td{text-align:left;padding:14px;border-bottom:1px solid #eef0f3;vertical-align:top}th{font-size:12px;color:#6b7280;background:#fafbfc}td{font-size:13px}.orderId{font-weight:800}.muted{color:#6b7280}.pill,.status{display:inline-block;padding:5px 8px;border-radius:999px;background:#f3f4f6;font-size:11px;font-weight:800;margin-top:6px}.statusProcessing{color:#1d4ed8;background:#eff6ff}.statusCompleted{color:#dc2626;background:#fef2f2}.statusWaiting{color:#92400e;background:#fffbeb}.actions{display:flex;flex-wrap:wrap;gap:6px}.actions form{margin:0}.actions button,.btn{border:0;border-radius:9px;padding:8px 10px;font-weight:750;cursor:pointer;text-decoration:none;display:inline-flex}.ok{background:#dcfce7;color:#166534}.danger{background:#fee2e2;color:#991b1b}.process{background:#dbeafe;color:#1d4ed8}.done{background:#fee2e2;color:#b91c1c}input,select,textarea{width:100%;border:1px solid #d1d5db;border-radius:10px;padding:10px 11px;font:inherit;background:#fff}textarea{min-height:80px;resize:vertical}.field label{display:block;font-size:11px;font-weight:800;margin-bottom:6px;color:#4b5563}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.panel{padding:18px;margin-bottom:16px}.panel h2{margin:0 0 15px;font-size:18px}.save{background:#111827;color:#fff}.productTable img{width:58px;height:58px;object-fit:cover;border-radius:10px;background:#f3f4f6}.check{display:flex;align-items:center;gap:8px}.check input{width:auto}.sectionTitle{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:18px 0 12px}.sectionTitle h2{margin:0}.refCode{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:900;font-size:14px;letter-spacing:.05em}.discount{color:#047857;font-weight:800}.inactive{opacity:.58}@media(max-width:900px){.wrap{padding:16px}.stats{grid-template-columns:repeat(2,1fr)}.top{flex-direction:column}.grid{grid-template-columns:1fr 1fr}}@media(max-width:580px){.grid{grid-template-columns:1fr}}`;
 }
-
 function nav(active) {
   return `<div class="nav"><a class="${active === 'orders' ? 'active' : ''}" href="/">Pesanan</a><a class="${active === 'products' ? 'active' : ''}" href="/products">Kelola Produk</a><a class="${active === 'referrals' ? 'active' : ''}" href="/referrals">Kode Referensi</a></div>`;
 }
-
 function renderDashboard(orders, view) {
-  const waitingPayment = orders.filter(o => o.paymentStatus === 'MENUNGGU_VERIFIKASI').length;
-  const waiting = orders.filter(o => ['MENUNGGU_VERIFIKASI', 'MENUNGGU_KONFIRMASI'].includes(o.orderStatus)).length;
+  const waitingPayment = orders.filter(o => ['MENUNGGU_PEMBAYARAN', 'MENUNGGU_VERIFIKASI'].includes(o.paymentStatus)).length;
+  const waiting = orders.filter(o => ['MENUNGGU_PEMBAYARAN', 'MENUNGGU_VERIFIKASI', 'MENUNGGU_KONFIRMASI'].includes(o.orderStatus)).length;
   const processing = orders.filter(o => ['DIPROSES', 'SEDANG_DISIAPKAN', 'SIAP_DIKIRIM', 'DALAM_PENGANTARAN'].includes(o.orderStatus)).length;
   const completed = orders.filter(o => o.orderStatus === 'SELESAI').length;
   const visible = filterOrders(orders, view);
@@ -481,28 +683,24 @@ function renderDashboard(orders, view) {
       <td>${(o.items || []).map(i => `<div>${esc(i.name)} × ${Number(i.quantity) || 1}</div>`).join('')}</td>
       <td><div>${esc(rupiah(original))}</div>${discount ? `<div class="discount">-${esc(rupiah(discount))}</div>` : ''}<b>${esc(rupiah(o.subtotal))}</b></td>
       <td>${o.referralCode ? `<span class="refCode">${esc(o.referralCode)}</span>` : '<span class="muted">—</span>'}</td>
-      <td><div>${esc(o.paymentMethod)}</div><span class="pill">${esc(o.paymentStatus)}</span></td>
+      <td><div>${esc(o.paymentMethod)}</div>${o.midtransTransactionStatus ? `<div class="muted">Midtrans: ${esc(o.midtransTransactionStatus)}</div>` : ''}<span class="pill">${esc(o.paymentStatus)}</span></td>
       <td><span class="${cls}">${esc(STATUS_LABELS[o.orderStatus] || o.orderStatus)}</span></td>
       <td><div class="actions">${actionButtons(o, view)}</div></td>
     </tr>`;
   }).join('');
   const tab = (key, label, count) => `<a class="tab ${view === key ? 'active' : ''}" href="/?view=${key}">${label}<b>${count}</b></a>`;
-  return `<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="10"><title>GrosirHub Operational</title><style>${css()}</style></head><body><div class="wrap"><div class="top"><div><h1>GrosirHub Operational</h1><p>Kelola pembayaran, progres pengiriman, produk, dan kode referensi dari satu dashboard.</p></div>${nav('orders')}</div><div class="stats"><div class="stat"><span>Total Pesanan</span><b>${orders.length}</b></div><div class="stat"><span>Menunggu Verifikasi</span><b>${waitingPayment}</b></div><div class="stat"><span>Dalam Proses</span><b>${processing}</b></div><div class="stat"><span>Selesai</span><b>${completed}</b></div></div><div class="toolbar"><div class="tabs">${tab('semua', 'Semua', orders.length)}${tab('menunggu', 'Menunggu', waiting)}${tab('diproses', 'Diproses', processing)}${tab('selesai', 'Selesai', completed)}</div><div class="exports"><a class="exportBtn" href="/export/csv?view=${view}">Export CSV</a><a class="exportBtn" href="/export/excel?view=${view}">Export Excel</a><a class="exportBtn" href="/export/json?view=${view}">Export JSON</a></div></div><div class="tableWrap">${visible.length ? `<table><thead><tr><th>Order</th><th>Pelanggan</th><th>Item</th><th>Total</th><th>Kode Referensi</th><th>Pembayaran</th><th>Status Pengiriman</th><th>Aksi</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="empty">Belum ada pesanan pada klasifikasi ini.</div>'}</div></div></body></html>`;
+  return `<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="10"><title>GrosirHub Operational</title><style>${css()}</style></head><body><div class="wrap"><div class="top"><div><h1>GrosirHub Operational</h1><p>Kelola pembayaran, progres pengiriman, produk, dan kode referensi dari satu dashboard.</p></div>${nav('orders')}</div><div class="stats"><div class="stat"><span>Total Pesanan</span><b>${orders.length}</b></div><div class="stat"><span>Menunggu Pembayaran</span><b>${waitingPayment}</b></div><div class="stat"><span>Dalam Proses</span><b>${processing}</b></div><div class="stat"><span>Selesai</span><b>${completed}</b></div></div><div class="toolbar"><div class="tabs">${tab('semua', 'Semua', orders.length)}${tab('menunggu', 'Menunggu', waiting)}${tab('diproses', 'Diproses', processing)}${tab('selesai', 'Selesai', completed)}</div><div class="exports"><a class="exportBtn" href="/export/csv?view=${view}">Export CSV</a><a class="exportBtn" href="/export/excel?view=${view}">Export Excel</a><a class="exportBtn" href="/export/json?view=${view}">Export JSON</a></div></div><div class="tableWrap">${visible.length ? `<table><thead><tr><th>Order</th><th>Pelanggan</th><th>Item</th><th>Total</th><th>Kode Referensi</th><th>Pembayaran</th><th>Status Pengiriman</th><th>Aksi</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="empty">Belum ada pesanan pada klasifikasi ini.</div>'}</div></div></body></html>`;
 }
-
 function productFields(p = {}) {
   return `<div class="grid"><div class="field"><label>Nama Produk</label><input required name="name" value="${esc(p.name || '')}"></div><div class="field"><label>Kategori</label><select name="category">${['sembako', 'minuman', 'snack', 'instan', 'dapur', 'kebersihan', 'personal', 'frozen', 'usaha'].map(v => `<option value="${v}" ${p.category === v ? 'selected' : ''}>${v}</option>`).join('')}</select></div><div class="field"><label>Unit / Kemasan</label><input name="unit" value="${esc(p.unit || '1 pcs')}"></div><div class="field"><label>Tag</label><input name="tag" value="${esc(p.tag || '')}"></div><div class="field"><label>Harga Normal</label><input required type="number" min="0" name="price" value="${Number(p.price) || 0}"></div><div class="field"><label>Harga Grosir</label><input required type="number" min="0" name="wholesalePrice" value="${Number(p.wholesalePrice) || 0}"></div><div class="field"><label>Diskon (%)</label><input type="number" min="0" name="discount" value="${Number(p.discount) || 0}"></div><div class="field"><label>Minimal Order</label><input type="number" min="1" name="minOrder" value="${Number(p.minOrder) || 1}"></div><div class="field"><label>Stok</label><input type="number" min="0" name="stock" value="${Number(p.stock) || 0}"></div><div class="field"><label>Emoji</label><input name="emoji" value="${esc(p.emoji || '📦')}"></div><div class="field" style="grid-column:span 2"><label>URL Gambar</label><input name="image" value="${esc(p.image || '')}"></div><div class="field" style="grid-column:1/-1"><label>Deskripsi</label><textarea name="description">${esc(p.description || '')}</textarea></div><div class="field"><label class="check"><input type="checkbox" name="featured" ${p.featured ? 'checked' : ''}> Produk Rekomendasi</label></div></div>`;
 }
-
 function renderProducts(products) {
   const rows = products.map(p => `<tr><td>${p.image ? `<img src="${esc(p.image)}" alt="">` : `<div style="font-size:32px">${esc(p.emoji || '📦')}</div>`}</td><td><b>${esc(p.name)}</b><div class="muted">${esc(p.id)}</div></td><td>${esc(p.category)}</td><td>${esc(rupiah(p.wholesalePrice))}</td><td>${Number(p.stock) || 0}</td><td><details><summary class="btn process">Edit</summary><form method="post" action="/products/${encodeURIComponent(p.id)}/update" style="margin-top:12px;min-width:760px">${productFields(p)}<button class="btn save" style="margin-top:12px">Simpan Perubahan</button></form></details></td><td><form method="post" action="/products/${encodeURIComponent(p.id)}/delete" onsubmit="return confirm('Hapus produk ini?')"><button class="btn danger">Hapus</button></form></td></tr>`).join('');
   return `<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Kelola Produk - GrosirHub</title><style>${css()}</style></head><body><div class="wrap"><div class="top"><div><h1>Kelola Produk</h1><p>Tambah, edit, atau hapus produk yang tampil pada website utama.</p></div>${nav('products')}</div><div class="panel"><h2>Tambah Produk Baru</h2><form method="post" action="/products">${productFields()}<button class="btn save" style="margin-top:14px">Tambah Produk</button></form></div><div class="sectionTitle"><h2>Daftar Produk</h2><span class="muted">${products.length} produk</span></div><div class="tableWrap"><table class="productTable"><thead><tr><th>Gambar</th><th>Produk</th><th>Kategori</th><th>Harga Grosir</th><th>Stok</th><th>Edit</th><th>Hapus</th></tr></thead><tbody>${rows}</tbody></table></div></div></body></html>`;
 }
-
 function referralFields(ref = {}) {
   return `<div class="grid"><div class="field"><label>Kode Referensi</label><input required name="code" value="${esc(ref.code || '')}" placeholder="Contoh: ARWA10" style="text-transform:uppercase"></div><div class="field"><label>Tipe Diskon</label><select name="type"><option value="percent" ${ref.type !== 'fixed' ? 'selected' : ''}>Persentase (%)</option><option value="fixed" ${ref.type === 'fixed' ? 'selected' : ''}>Nominal (Rp)</option></select></div><div class="field"><label>Nilai Diskon</label><input required type="number" min="0" name="value" value="${Number(ref.value) || 0}"></div><div class="field"><label class="check" style="margin-top:27px"><input type="checkbox" name="active" ${ref.active ? 'checked' : ''}> Aktifkan Kode</label></div></div>`;
 }
-
 function renderReferrals(referrals) {
   const rows = referrals.map(ref => `<tr class="${ref.active ? '' : 'inactive'}"><td><span class="refCode">${esc(ref.code)}</span></td><td>${ref.type === 'fixed' ? esc(rupiah(ref.value)) : `${Number(ref.value) || 0}%`}</td><td>${ref.active ? '<span class="status statusProcessing">Aktif</span>' : '<span class="status">Nonaktif</span>'}</td><td>${Number(ref.usageCount) || 0}×</td><td><details><summary class="btn process">Edit</summary><form method="post" action="/referrals/${encodeURIComponent(ref.id)}/update" style="margin-top:12px;min-width:720px">${referralFields(ref)}<button class="btn save" style="margin-top:12px">Simpan Perubahan</button></form></details></td><td><form method="post" action="/referrals/${encodeURIComponent(ref.id)}/delete" onsubmit="return confirm('Hapus kode referensi ini?')"><button class="btn danger">Hapus</button></form></td></tr>`).join('');
   return `<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Kode Referensi - GrosirHub</title><style>${css()}</style></head><body><div class="wrap"><div class="top"><div><h1>Kode Referensi</h1><p>Buat kode diskon yang dapat dimasukkan customer sebelum melakukan pembayaran.</p></div>${nav('referrals')}</div><div class="panel"><h2>Tambah Kode Referensi</h2><form method="post" action="/referrals">${referralFields({ active: true })}<button class="btn save" style="margin-top:14px">Tambah Kode</button></form></div><div class="sectionTitle"><h2>Daftar Kode</h2><span class="muted">${referrals.length} kode</span></div><div class="tableWrap">${referrals.length ? `<table><thead><tr><th>Kode</th><th>Diskon</th><th>Status</th><th>Dipakai</th><th>Edit</th><th>Hapus</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="empty">Belum ada kode referensi. Tambahkan kode pertama di atas.</div>'}</div></div></body></html>`;
