@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, CheckCircle2, CreditCard, QrCode, Tag, WalletCards } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, CreditCard, QrCode, ShieldCheck, Tag, WalletCards } from 'lucide-react';
 import { useCart } from '../context/CartContext';
 import { rupiah } from '../components/Cards';
 import { api } from '../services/api';
@@ -11,6 +11,22 @@ const methods = [
   { id:'E-Wallet', label:'E-Wallet', desc:'Gunakan dompet digital pilihan Anda.', icon:WalletCards }
 ];
 
+function loadSnapScript(src, clientKey){
+  return new Promise((resolve,reject)=>{
+    const current = document.querySelector('script[data-midtrans-snap="true"]');
+    if(current && window.snap && current.src===src && current.getAttribute('data-client-key')===clientKey) return resolve();
+    if(current) current.remove();
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = true;
+    script.setAttribute('data-client-key', clientKey);
+    script.setAttribute('data-midtrans-snap', 'true');
+    script.onload = () => window.snap ? resolve() : reject(new Error('Snap Midtrans tidak tersedia.'));
+    script.onerror = () => reject(new Error('Gagal memuat Snap Midtrans.'));
+    document.head.appendChild(script);
+  });
+}
+
 export default function Checkout(){
   const { items, subtotal, clear } = useCart();
   const [form,setForm] = useState({name:'',phone:'',address:'',paymentMethod:'Transfer Bank'});
@@ -18,10 +34,19 @@ export default function Checkout(){
   const [appliedReferral,setAppliedReferral] = useState(null);
   const [referralLoading,setReferralLoading] = useState(false);
   const [referralError,setReferralError] = useState('');
+  const [paymentConfig,setPaymentConfig] = useState({configured:false,environment:'sandbox',loaded:false});
   const [loading,setLoading] = useState(false);
   const [error,setError] = useState('');
   const [success,setSuccess] = useState(null);
   const change = e => setForm(v=>({...v,[e.target.name]:e.target.value}));
+
+  useEffect(()=>{
+    let alive = true;
+    api.paymentConfig()
+      .then(result=>{ if(alive) setPaymentConfig({...result,loaded:true}); })
+      .catch(()=>{ if(alive) setPaymentConfig({configured:false,environment:'sandbox',loaded:true}); });
+    return ()=>{ alive=false; };
+  },[]);
 
   async function applyReferral(){
     const code = referralInput.trim().toUpperCase();
@@ -53,6 +78,13 @@ export default function Checkout(){
     if(appliedReferral && value !== appliedReferral.code) setAppliedReferral(null);
   }
 
+  async function manualCheckout(payload){
+    const result = await api.checkout(payload);
+    localStorage.setItem('grosirhub-latest-order', JSON.stringify({id:result.order.id,phone:form.phone}));
+    setSuccess({...result.order,_paymentFlow:'manual'});
+    clear();
+  }
+
   async function submit(e){
     e.preventDefault();
     if(!items.length) return;
@@ -64,18 +96,69 @@ export default function Checkout(){
         referral = await api.validateReferral(referralInput.trim().toUpperCase(), subtotal);
         setAppliedReferral(referral);
       }
-      const result = await api.checkout({
+
+      const payload = {
         customer:{name:form.name,phone:form.phone,address:form.address},
         items:items.map(i=>({id:i.id,name:i.name,quantity:i.quantity,wholesalePrice:i.wholesalePrice})),
         subtotal,
         referralCode:referral?.code || '',
         paymentMethod:form.paymentMethod
+      };
+
+      let config = paymentConfig;
+      if(!config.loaded){
+        try{
+          const liveConfig = await api.paymentConfig();
+          config = {...liveConfig,loaded:true};
+          setPaymentConfig(config);
+        }catch{
+          config = {configured:false,environment:'sandbox',loaded:true};
+          setPaymentConfig(config);
+        }
+      }
+
+      if(!config.configured){
+        await manualCheckout(payload);
+        return;
+      }
+
+      let payment;
+      try{
+        payment = await api.createPayment(payload);
+      }catch(err){
+        if(err.payload?.code==='MIDTRANS_NOT_CONFIGURED'){
+          setPaymentConfig({configured:false,environment:'sandbox',loaded:true});
+          await manualCheckout(payload);
+          return;
+        }
+        throw err;
+      }
+
+      localStorage.setItem('grosirhub-latest-order', JSON.stringify({id:payment.order.id,phone:form.phone}));
+
+      if(payment.freeOrder){
+        setSuccess({...payment.order,_paymentFlow:'free'});
+        clear();
+        return;
+      }
+
+      await loadSnapScript(payment.snapJsUrl, payment.clientKey);
+      setLoading(false);
+      window.snap.pay(payment.token, {
+        onSuccess: ()=>{
+          setSuccess({...payment.order,_paymentFlow:'success'});
+          clear();
+        },
+        onPending: ()=>{
+          setSuccess({...payment.order,_paymentFlow:'pending'});
+          clear();
+        },
+        onError: ()=>setError('Pembayaran Midtrans gagal diproses. Silakan coba lagi.'),
+        onClose: ()=>setError('Jendela pembayaran ditutup. Pesanan masih menunggu pembayaran dan dapat dicek dari Status Pesanan.')
       });
-      localStorage.setItem('grosirhub-latest-order', JSON.stringify({id:result.order.id,phone:form.phone}));
-      setSuccess(result.order);
-      clear();
+      return;
     }catch(err){
-      setError(err.message || 'Konfirmasi pembayaran belum berhasil dikirim. Silakan coba lagi.');
+      setError(err.message || 'Pembayaran belum berhasil diproses. Silakan coba lagi.');
     }finally{
       setLoading(false);
     }
@@ -84,13 +167,28 @@ export default function Checkout(){
   const discountAmount = Number(appliedReferral?.discountAmount) || 0;
   const finalTotal = Math.max(0, subtotal - discountAmount);
 
-  if(success) return <div className="page"><div style={{maxWidth:760,margin:'60px auto',background:'var(--card)',border:'1px solid var(--line)',borderRadius:24,padding:42,textAlign:'center',boxShadow:'var(--shadow)'}}><CheckCircle2 style={{width:58,height:58,color:'var(--teal)',marginBottom:14}}/><h1 style={{color:'var(--navy)',margin:'0 0 10px'}}>Konfirmasi pembayaran diterima</h1><p style={{color:'var(--muted)',lineHeight:1.7}}>Pesanan <b>{success.id}</b> sudah masuk ke tim operasional. Anda sekarang bisa memantau proses persiapan hingga pengantaran langsung dari website ini.</p><div style={{margin:'24px 0',padding:18,borderRadius:16,background:'#eef8f6'}}>{success.referralCode&&<div style={{fontSize:12,color:'var(--teal)',fontWeight:800,marginBottom:7}}>Kode referensi {success.referralCode} · Hemat {rupiah(success.discountAmount)}</div>}<b>{rupiah(success.subtotal)}</b><div style={{fontSize:12,color:'var(--muted)',marginTop:6}}>Status awal · Menunggu verifikasi pembayaran</div></div><div style={{display:'flex',justifyContent:'center',gap:10,flexWrap:'wrap'}}><Link className="primaryBtn" to="/pesanan">Pantau Status Pesanan</Link><Link className="secondaryBtn" style={{color:'var(--navy)',border:'1px solid var(--line)',background:'var(--card)'}} to="/menu">Kembali ke Menu</Link></div></div></div>;
+  if(success){
+    const flow = success._paymentFlow || 'manual';
+    const title = flow==='manual'
+      ? 'Konfirmasi pembayaran diterima'
+      : flow==='pending'
+        ? 'Instruksi pembayaran berhasil dibuat'
+        : flow==='free'
+          ? 'Pesanan berhasil dibuat'
+          : 'Pembayaran diterima Midtrans';
+    const description = flow==='manual'
+      ? `Pesanan ${success.id} sudah masuk ke tim operasional dan menunggu verifikasi pembayaran.`
+      : flow==='pending'
+        ? `Pesanan ${success.id} sudah dibuat. Selesaikan pembayaran sesuai instruksi Midtrans; status akan diperbarui otomatis setelah pembayaran terkonfirmasi.`
+        : `Pesanan ${success.id} sudah masuk ke sistem. Status pembayaran dan proses pesanan akan disinkronkan otomatis.`;
+    return <div className="page"><div style={{maxWidth:760,margin:'60px auto',background:'var(--card)',border:'1px solid var(--line)',borderRadius:24,padding:42,textAlign:'center',boxShadow:'var(--shadow)'}}><CheckCircle2 style={{width:58,height:58,color:'var(--teal)',marginBottom:14}}/><h1 style={{color:'var(--navy)',margin:'0 0 10px'}}>{title}</h1><p style={{color:'var(--muted)',lineHeight:1.7}}>{description}</p><div style={{margin:'24px 0',padding:18,borderRadius:16,background:'#eef8f6'}}>{success.referralCode&&<div style={{fontSize:12,color:'var(--teal)',fontWeight:800,marginBottom:7}}>Kode referensi {success.referralCode} · Hemat {rupiah(success.discountAmount)}</div>}<b>{rupiah(success.subtotal)}</b><div style={{fontSize:12,color:'var(--muted)',marginTop:6}}>{flow==='manual'?'Menunggu verifikasi pembayaran':'Status pembayaran diperbarui otomatis oleh Midtrans'}</div></div><div style={{display:'flex',justifyContent:'center',gap:10,flexWrap:'wrap'}}><Link className="primaryBtn" to="/pesanan">Pantau Status Pesanan</Link><Link className="secondaryBtn" style={{color:'var(--navy)',border:'1px solid var(--line)',background:'var(--card)'}} to="/menu">Kembali ke Menu</Link></div></div></div>;
+  }
 
   if(!items.length) return <div className="page"><div className="emptyCart"><h2>Belum ada item untuk dibayar</h2><p>Tambahkan produk ke keranjang terlebih dahulu.</p><Link className="primaryBtn" to="/menu">Lihat Menu</Link></div></div>;
 
   return <div className="page">
     <Link className="backLink" to="/keranjang"><ArrowLeft/> Kembali ke Keranjang</Link>
-    <div className="shopHero compact"><span>CHECKOUT</span><h1>Selesaikan pesanan Anda.</h1><p>Isi data pemesan, gunakan kode referensi jika ada, lalu pilih metode pembayaran.</p></div>
+    <div className="shopHero compact"><span>CHECKOUT</span><h1>Selesaikan pesanan Anda.</h1><p>Isi data pemesan, gunakan kode referensi jika ada, lalu selesaikan pembayaran dengan aman.</p></div>
     <form onSubmit={submit} style={{display:'grid',gridTemplateColumns:'minmax(0,1.15fr) minmax(320px,.85fr)',gap:26,marginTop:28}}>
       <div style={{display:'grid',gap:18}}>
         <section style={sectionStyle}>
@@ -114,9 +212,14 @@ export default function Checkout(){
         </section>
 
         <section style={sectionStyle}>
-          <h2 style={sectionTitle}>Metode Pembayaran</h2>
-          <div style={{display:'grid',gap:10}}>{methods.map(m=>{const Icon=m.icon;const active=form.paymentMethod===m.id;return <button type="button" key={m.id} onClick={()=>setForm(v=>({...v,paymentMethod:m.id}))} style={{display:'flex',alignItems:'center',gap:14,textAlign:'left',padding:16,borderRadius:14,border:active?'2px solid var(--teal)':'1px solid var(--line)',background:active?'#eef8f6':'var(--card)',color:'var(--text)'}}><Icon style={{width:24,height:24,color:'var(--teal)'}}/><span><b style={{display:'block'}}>{m.label}</b><small style={{color:'var(--muted)'}}>{m.desc}</small></span></button>})}</div>
-          <div style={{marginTop:16,padding:14,borderRadius:12,background:'#fff7e8',fontSize:11,lineHeight:1.6,color:'#8a5a00'}}>Lakukan pembayaran sesuai total akhir setelah diskon. Tombol di bawah digunakan untuk mengirim konfirmasi pembayaran ke tim operasional.</div>
+          <h2 style={sectionTitle}>Pembayaran</h2>
+          {paymentConfig.configured ? <>
+            <div style={{display:'flex',alignItems:'center',gap:14,padding:17,border:'1px solid var(--line)',borderRadius:14,background:'#eef8f6'}}><ShieldCheck style={{width:27,height:27,color:'var(--teal)'}}/><div><b style={{display:'block',color:'var(--navy)'}}>Midtrans Secure Payment</b><small style={{color:'var(--muted)'}}>Metode pembayaran akan dipilih di popup Midtrans · {paymentConfig.environment==='production'?'Production':'Sandbox'}</small></div></div>
+            <div style={{marginTop:14,padding:14,borderRadius:12,background:'#eef8f6',fontSize:11,lineHeight:1.6,color:'#146c63'}}>Setelah klik Bayar Sekarang, Midtrans akan menampilkan metode pembayaran yang tersedia. Status pembayaran akan masuk otomatis ke dashboard operational melalui webhook.</div>
+          </> : <>
+            <div style={{display:'grid',gap:10}}>{methods.map(m=>{const Icon=m.icon;const active=form.paymentMethod===m.id;return <button type="button" key={m.id} onClick={()=>setForm(v=>({...v,paymentMethod:m.id}))} style={{display:'flex',alignItems:'center',gap:14,textAlign:'left',padding:16,borderRadius:14,border:active?'2px solid var(--teal)':'1px solid var(--line)',background:active?'#eef8f6':'var(--card)',color:'var(--text)'}}><Icon style={{width:24,height:24,color:'var(--teal)'}}/><span><b style={{display:'block'}}>{m.label}</b><small style={{color:'var(--muted)'}}>{m.desc}</small></span></button>})}</div>
+            <div style={{marginTop:16,padding:14,borderRadius:12,background:'#fff7e8',fontSize:11,lineHeight:1.6,color:'#8a5a00'}}>{paymentConfig.loaded?'Midtrans belum diaktifkan, jadi checkout manual tetap digunakan sementara.':'Sedang memeriksa konfigurasi pembayaran...'}</div>
+          </>}
         </section>
       </div>
 
@@ -131,8 +234,8 @@ export default function Checkout(){
         </div>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:16,margin:'18px 0',paddingTop:15,borderTop:'1px solid var(--line)'}}><b>Total Bayar</b><b style={{color:'var(--navy)',fontSize:22}}>{rupiah(finalTotal)}</b></div>
         {error&&<div style={{padding:12,borderRadius:10,background:'#fee2e2',color:'#991b1b',fontSize:11,marginBottom:12}}>{error}</div>}
-        <button className="primaryBtn" type="submit" disabled={loading} style={{width:'100%',opacity:loading ? .65 : 1}}>{loading?'Mengirim Konfirmasi...':'Saya Sudah Bayar & Konfirmasi'}</button>
-        <small style={{display:'block',marginTop:12,color:'var(--muted)',lineHeight:1.6}}>Total pembayaran yang masuk ke dashboard operational sudah memperhitungkan diskon kode referensi yang valid.</small>
+        <button className="primaryBtn" type="submit" disabled={loading} style={{width:'100%',opacity:loading ? .65 : 1}}>{loading?(paymentConfig.configured?'Menyiapkan Pembayaran...':'Mengirim Konfirmasi...'):(paymentConfig.configured?'Bayar Sekarang via Midtrans':'Saya Sudah Bayar & Konfirmasi')}</button>
+        <small style={{display:'block',marginTop:12,color:'var(--muted)',lineHeight:1.6}}>{paymentConfig.configured?'Nominal final dihitung ulang di server sebelum transaksi Midtrans dibuat, termasuk diskon kode referensi yang valid.':'Total pembayaran yang masuk ke dashboard operational sudah memperhitungkan diskon kode referensi yang valid.'}</small>
       </aside>
     </form>
   </div>;
